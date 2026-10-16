@@ -1,0 +1,60 @@
+name: Build Windows release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-release-v1
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Test and build Windows package
+        shell: pwsh
+        run: ./build.ps1 -PythonPath python
+      - name: Check GUI startup
+        shell: pwsh
+        run: |
+          $app = (Resolve-Path 'dist/听转音频转换器.exe').Path
+          $process = Start-Process -FilePath $app -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'GUI startup failed.' }
+      - name: Prepare release asset
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath 'dist/听转-windows-x64.zip' -Destination 'dist/tingzhuan-windows-x64.zip'
+          $hash = (Get-FileHash -LiteralPath 'dist/tingzhuan-windows-x64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  tingzhuan-windows-x64.zip" | Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding ascii
+      - name: Publish first release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view v1.0.0 --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output 'Release v1.0.0 already exists; keeping its assets unchanged.'
+            exit 0
+          }
+          gh release create v1.0.0 'dist/tingzhuan-windows-x64.zip' 'dist/SHA256SUMS.txt' --target $env:RELEASE_COMMIT --title '听转 1.0.0 · Windows 批量音频转换器' --notes-file RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
